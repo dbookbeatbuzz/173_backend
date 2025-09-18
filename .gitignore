@@ -1,0 +1,5 @@
+# pretrained model files
+*.pt
+pretrained_models/
+exp_models/
+.venv/
