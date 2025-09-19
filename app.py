@@ -3,12 +3,26 @@ import os
 from typing import Optional
 
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 from evaluator import evaluate_client
+from blueprints.model_tests import bp as model_tests_bp
 
 
 def create_app():
     app = Flask(__name__)
+    
+    # 启用CORS支持
+    CORS(app, supports_credentials=True, resources={
+        r"/api/*": {
+            "origins": "*",
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "Last-Event-ID"]
+        }
+    })
+    
+    # 注册模型测试API蓝图
+    app.register_blueprint(model_tests_bp, url_prefix='/api/model-tests')
 
     MODELS_ROOT = os.environ.get(
         "MODELS_ROOT", "exp_models/Domainnet_ViT_fedsak_lda"

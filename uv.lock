@@ -26,7 +26,7 @@ dependencies = [
 requires-dist = [
     { name = "flask", specifier = ">=2.3.0" },
     { name = "flask-cors", specifier = ">=4.0.0" },
-    { name = "gunicorn", specifier = ">=21.2.0" },
+    { name = "gunicorn", specifier = ">=21.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "scikit-learn", specifier = ">=1.3.0" },
