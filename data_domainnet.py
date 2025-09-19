@@ -175,7 +175,7 @@ def build_domainnet_splits(
     )
 
     def _apply(idx_list, t):
-        return TransformWrapper(Subset(full_dataset, idx_list), transform=t)
+        return Subset(TransformWrapper(full_dataset, transform=t), idx_list)
 
     train_set = _apply(train_idx, train_t)
     val_set = _apply(val_idx, eval_t)
