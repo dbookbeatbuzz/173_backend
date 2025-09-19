@@ -3,3 +3,7 @@
 pretrained_models/
 exp_models/
 .venv/
+
+# pycaches
+__pycache__/
+*.pyc
