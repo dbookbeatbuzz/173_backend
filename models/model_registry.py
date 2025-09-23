@@ -73,7 +73,7 @@ class ModelRegistry:
             name="ViT-DomainNet-FedSAK",
             model_type=ModelType.VISION_TRANSFORMER,
             input_type=InputType.IMAGE,
-            description="Vision Transformer trained on DomainNet with FedSAK strategy (170 classes per domain)",
+            description="Vision Transformer trained on DomainNet",
             model_path="exp_models/Domainnet_ViT_fedsak_lda",
             checkpoint_pattern="client/client_model_{client_id}.pt",
             num_labels=None,  # 动态计算，取决于实际数据集中的类别数量
