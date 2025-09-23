@@ -7,6 +7,7 @@ from flask_cors import CORS
 
 from evaluator import evaluate_client
 from blueprints.model_tests import bp as model_tests_bp
+from models.model_registry import model_registry
 
 
 def create_app():
@@ -36,6 +37,48 @@ def create_app():
     @app.get("/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.get("/api/models")
+    def list_models():
+        """列出所有可用的模型"""
+        models = []
+        for config in model_registry.list_models():
+            # 验证模型文件是否存在
+            model_exists = model_registry.validate_model_exists(config.model_id, client_id=1)
+            
+            models.append({
+                "id": config.model_id,
+                "name": config.name,
+                "type": config.model_type.value,
+                "inputType": config.input_type.value,
+                "description": config.description,
+                "dataset": config.dataset_name,
+                "available": model_exists
+            })
+        
+        return jsonify({"models": models})
+
+    @app.get("/api/models/<model_id>")
+    def get_model_info(model_id: str):
+        """获取特定模型的详细信息"""
+        config = model_registry.get_model(model_id)
+        if not config:
+            return jsonify({"error": "Model not found"}), 404
+        
+        model_exists = model_registry.validate_model_exists(model_id, client_id=1)
+        
+        return jsonify({
+            "id": config.model_id,
+            "name": config.name,
+            "type": config.model_type.value,
+            "inputType": config.input_type.value,
+            "description": config.description,
+            "dataset": config.dataset_name,
+            "strategy": config.strategy,
+            "numLabels": config.num_labels,
+            "available": model_exists,
+            "modelPath": config.model_path
+        })
 
     @app.get("/clients")
     def list_clients():

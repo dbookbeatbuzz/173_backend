@@ -10,59 +10,11 @@ from PIL import Image
 import io
 
 from models.job_store import jobs, lock
+from models.model_registry import model_registry
+from models.dataset_manager import DatasetManagerFactory, DatasetConfig
 from evaluator import load_client_checkpoint, _infer_model_hyperparams_from_state
 from eval_model import build_model_for_eval
-from data_domainnet import build_domainnet_splits
 
-
-# DomainNet 类别标签 (根据实际数据集调整)
-DOMAINNET_LABELS = [
-    'aircraft_carrier', 'airplane', 'alarm_clock', 'ambulance', 'angel', 'animal_migration', 
-    'ant', 'anvil', 'apple', 'arm', 'asparagus', 'axe', 'backpack', 'banana', 'bandage', 
-    'barn', 'baseball', 'baseball_bat', 'basket', 'basketball', 'bat', 'bathtub', 'beach', 
-    'bear', 'beard', 'bed', 'bee', 'belt', 'bench', 'bicycle', 'binoculars', 'bird', 
-    'birthday_cake', 'blackberry', 'blueberry', 'book', 'boomerang', 'bottlecap', 'bowtie', 
-    'bracelet', 'brain', 'bread', 'bridge', 'broccoli', 'broom', 'bucket', 'bulldozer', 
-    'bus', 'bush', 'butterfly', 'cactus', 'cake', 'calculator', 'calendar', 'camel', 
-    'camera', 'camouflage', 'campfire', 'candle', 'cannon', 'canoe', 'car', 'carrot', 
-    'castle', 'cat', 'ceiling_fan', 'cell_phone', 'cello', 'chair', 'chandelier', 
-    'church', 'circle', 'clarinet', 'clock', 'cloud', 'coffee_cup', 'compass', 'computer', 
-    'cookie', 'cooler', 'couch', 'cow', 'crab', 'crayon', 'crocodile', 'crown', 'cruise_ship', 
-    'cup', 'diamond', 'dishwasher', 'diving_board', 'dog', 'dolphin', 'donut', 'door', 
-    'dragon', 'dresser', 'drill', 'drums', 'duck', 'dumbbell', 'ear', 'elbow', 'elephant', 
-    'envelope', 'eraser', 'eye', 'eyeglasses', 'face', 'fan', 'feather', 'fence', 'finger', 
-    'fire_hydrant', 'fireplace', 'firetruck', 'fish', 'flamingo', 'flashlight', 'flip_flops', 
-    'floor_lamp', 'flower', 'flying_saucer', 'foot', 'fork', 'frog', 'frying_pan', 
-    'garden', 'garden_hose', 'giraffe', 'goatee', 'golf_club', 'grapes', 'grass', 'guitar', 
-    'hamburger', 'hammer', 'hand', 'harp', 'hat', 'headphones', 'hedgehog', 'helicopter', 
-    'helmet', 'hexagon', 'hockey_puck', 'hockey_stick', 'horse', 'hospital', 'hot_air_balloon', 
-    'hot_dog', 'hot_tub', 'hourglass', 'house', 'house_plant', 'hurricane', 'ice_cream', 
-    'jacket', 'jail', 'kangaroo', 'key', 'keyboard', 'knee', 'knife', 'ladder', 'lantern', 
-    'laptop', 'leaf', 'leg', 'light_bulb', 'lighter', 'lighthouse', 'lightning', 'line', 
-    'lion', 'lipstick', 'lobster', 'lollipop', 'mailbox', 'map', 'marker', 'matches', 
-    'megaphone', 'mermaid', 'microphone', 'microwave', 'monkey', 'moon', 'mosquito', 
-    'motorbike', 'mountain', 'mouse', 'moustache', 'mouth', 'mug', 'mushroom', 'nail', 
-    'necklace', 'nose', 'ocean', 'octagon', 'octopus', 'onion', 'oven', 'owl', 'paint_can', 
-    'paintbrush', 'palm_tree', 'panda', 'pants', 'paper_clip', 'parachute', 'parrot', 
-    'passport', 'peanut', 'pear', 'peas', 'pencil', 'penguin', 'piano', 'pickup_truck', 
-    'picture_frame', 'pig', 'pillow', 'pineapple', 'pizza', 'pliers', 'police_car', 
-    'pond', 'pool', 'popsicle', 'postcard', 'potato', 'power_outlet', 'purse', 'rabbit', 
-    'raccoon', 'radio', 'rain', 'rainbow', 'rake', 'remote_control', 'rhinoceros', 'rifle', 
-    'river', 'roller_coaster', 'rollerskates', 'sailboat', 'sandwich', 'saw', 'saxophone', 
-    'school_bus', 'scissors', 'scorpion', 'screwdriver', 'sea_turtle', 'see_saw', 'shark', 
-    'sheep', 'shoe', 'shorts', 'shovel', 'sink', 'skateboard', 'skull', 'skyscraper', 
-    'sleeping_bag', 'smiley_face', 'snail', 'snake', 'snorkel', 'snowflake', 'snowman', 
-    'soccer_ball', 'sock', 'speedboat', 'spider', 'spoon', 'spreadsheet', 'square', 
-    'squiggle', 'squirrel', 'stairs', 'star', 'steak', 'stereo', 'stethoscope', 'stitches', 
-    'stop_sign', 'stove', 'strawberry', 'streetlight', 'string_bean', 'submarine', 'suitcase', 
-    'sun', 'swan', 'sweater', 'swing_set', 'sword', 'syringe', 'table', 'teapot', 'teddy-bear', 
-    'telephone', 'television', 'tennis_racquet', 'tent', 'The_Eiffel_Tower', 'The_Great_Wall_of_China', 
-    'The_Mona_Lisa', 'tiger', 'toaster', 'toe', 'toilet', 'tooth', 'toothbrush', 'toothpaste', 
-    'tornado', 'tractor', 'traffic_light', 'train', 'tree', 'triangle', 'trombone', 'truck', 
-    'trumpet', 't-shirt', 'umbrella', 'underwear', 'van', 'vase', 'violin', 'washing_machine', 
-    'watermelon', 'waterslide', 'whale', 'wheel', 'windmill', 'wine_bottle', 'wine_glass', 
-    'wristwatch', 'yoga', 'zebra', 'zigzag'
-]
 
 # 传输模式：'url' 或 'data-url'
 TRANSPORT_MODE = 'data-url'
@@ -102,24 +54,49 @@ def _emit(job, event: str, payload: Dict[str, Any]):
 def load_model_for_job(job):
     """为指定任务加载模型"""
     try:
-        # 获取环境配置
-        models_root = os.environ.get("MODELS_ROOT", "exp_models/Domainnet_ViT_fedsak_lda")
-        data_root = os.environ.get("DATA_ROOT", "/root/domainnet")
-        preprocessor_json = os.environ.get(
-            "CLIP_PREPROCESSOR_JSON", 
-            "pretrained_models/clip-vit-base-patch16/preprocessor_config.json"
+        # 获取模型配置
+        model_config = model_registry.get_model(job.model_id)
+        if not model_config:
+            raise ValueError(f"Model {job.model_id} not found in registry")
+        
+        # 创建数据集管理器
+        dataset_config = DatasetConfig(
+            name=model_config.dataset_name,
+            root=model_config.dataset_config.get('root'),
+            input_type=model_config.input_type.value,
+            num_classes=0,  # 将由数据集管理器动态确定
+            preprocessing_config=model_config.dataset_config.get('preprocessor_path'),
+            additional_config=model_config.dataset_config
         )
         
-        # 加载数据集信息
-        _, _, test_set, num_labels = build_domainnet_splits(
-            root=data_root, 
-            preprocessor_path=preprocessor_json,
-            seed=12345
+        dataset_manager = DatasetManagerFactory.create_manager(
+            model_config.dataset_name, 
+            dataset_config
         )
         
-        # 加载客户端模型
-        state = load_client_checkpoint(models_root, int(job.model_id))
+        # 获取测试数据集
+        test_set, num_labels = dataset_manager.get_test_dataset()
+        
+        # 加载模型权重
+        # 使用job中的客户端ID
+        client_id = getattr(job, 'client_id', 1)  # 向后兼容
+        
+        model_path = model_registry.get_model_path(job.model_id, client_id)
+        if not model_path or not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        # 加载模型状态
+        state = torch.load(model_path, map_location="cpu")
+        if isinstance(state, dict) and "model" in state:
+            state = state["model"]
+        
+        # 推断模型超参数
         strategy, adapter_last_k, adapter_bottleneck = _infer_model_hyperparams_from_state(state)
+        
+        # 使用配置文件中的参数，如果可用的话
+        strategy = model_config.strategy
+        adapter_last_k = model_config.adapter_last_k
+        adapter_bottleneck = model_config.adapter_bottleneck
         
         # 构建模型
         model = build_model_for_eval(
@@ -137,7 +114,7 @@ def load_model_for_job(job):
         model.to(device)
         model.eval()
         
-        return model, test_set, device, num_labels
+        return model, test_set, dataset_manager, device, num_labels
         
     except Exception as e:
         raise RuntimeError(f"Failed to load model {job.model_id}: {str(e)}")
@@ -153,7 +130,7 @@ def run_job(job_id: str):
 
     try:
         # 加载模型和数据集
-        model, test_set, device, num_labels = load_model_for_job(job)
+        model, test_set, dataset_manager, device, num_labels = load_model_for_job(job)
         
         # 设置随机种子
         rnd = random.Random(job.random_seed)
@@ -168,12 +145,8 @@ def run_job(job_id: str):
                 # 获取数据
                 image, true_label = test_set[dataset_idx]
                 
-                # 获取标签名
-                if hasattr(test_set.dataset, 'idx_to_class'):
-                    label_name = test_set.dataset.idx_to_class[true_label]
-                else:
-                    # 回退到数字标签
-                    label_name = str(true_label)
+                # 使用数据集管理器获取标签名
+                label_name = dataset_manager.get_class_name(true_label)
                 
                 # 模型推理
                 start_time = time.time()
@@ -188,20 +161,14 @@ def run_job(job_id: str):
                 top_probs, top_indices = torch.topk(probs[0], min(5, num_labels))
                 topk = []
                 for prob, idx in zip(top_probs, top_indices):
-                    if hasattr(test_set.dataset, 'idx_to_class'):
-                        class_name = test_set.dataset.idx_to_class[idx.item()]
-                    else:
-                        class_name = str(idx.item())
+                    class_name = dataset_manager.get_class_name(idx.item())
                     topk.append({
                         'label': class_name,
                         'prob': float(prob)
                     })
                 
                 # 获取预测标签名
-                if hasattr(test_set.dataset, 'idx_to_class'):
-                    pred_label_name = test_set.dataset.idx_to_class[predicted_class]
-                else:
-                    pred_label_name = str(predicted_class)
+                pred_label_name = dataset_manager.get_class_name(predicted_class)
                 
                 # 构建输入数据
                 case_id = f"img_{case_idx:05d}"

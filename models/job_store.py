@@ -7,12 +7,13 @@ class Job:
     """模型测试任务的数据模型"""
     
     def __init__(self, job_id: str, model_id: str, total: int, input_type: str, 
-                 random_seed: Optional[int] = None):
+                 random_seed: Optional[int] = None, client_id: Optional[int] = None):
         self.job_id = job_id
         self.model_id = model_id
         self.total = total
         self.input_type = input_type  # 'text' or 'image'
         self.random_seed = random_seed
+        self.client_id = client_id or 1  # 默认使用客户端1
         self.status = 'pending'  # pending|running|cancelled|success|error
         self.processed = 0
         self.created_at = time.time()
@@ -30,9 +31,9 @@ lock = threading.Lock()
 
 
 def create_job(job_id: str, model_id: str, total: int, input_type: str, 
-               random_seed: Optional[int] = None) -> Job:
+               random_seed: Optional[int] = None, client_id: Optional[int] = None) -> Job:
     """创建新的测试任务"""
-    job = Job(job_id, model_id, total, input_type, random_seed)
+    job = Job(job_id, model_id, total, input_type, random_seed, client_id)
     with lock:
         jobs[job_id] = job
     return job

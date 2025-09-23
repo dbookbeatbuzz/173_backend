@@ -6,6 +6,7 @@ import uuid
 from typing import Dict, Any
 
 from models.job_store import jobs, Job, lock, create_job, get_job
+from models.model_registry import model_registry
 from services.model_test_runner import start_model_test_job
 
 bp = Blueprint('model_tests', __name__)
@@ -25,6 +26,11 @@ def start_test():
     except (ValueError, TypeError):
         return jsonify({'error': 'modelId must be string or number'}), 400
     
+    # 验证模型是否存在
+    model_config = model_registry.get_model(model_id)
+    if not model_config:
+        return jsonify({'error': f'Model {model_id} not found'}), 404
+    
     try:
         total = int(data.get('sampleCount', 50))
         if total < 1 or total > 2000:
@@ -39,9 +45,18 @@ def start_test():
         except (ValueError, TypeError):
             return jsonify({'error': 'randomSeed must be a valid number'}), 400
     
-    input_type = data.get('inputType', 'text')
-    if input_type not in ('text', 'image'):
+    input_type = data.get('inputType')
+    if input_type is None:
+        # 从模型配置中推断输入类型
+        input_type = model_config.input_type.value
+    elif input_type not in ('text', 'image'):
         return jsonify({'error': 'inputType must be "text" or "image"'}), 400
+    
+    # 验证输入类型与模型配置是否匹配
+    if input_type != model_config.input_type.value:
+        return jsonify({
+            'error': f'inputType "{input_type}" does not match model configuration "{model_config.input_type.value}"'
+        }), 400
     
     # 生成唯一的任务ID
     job_id = f"job_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
