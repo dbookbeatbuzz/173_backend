@@ -84,7 +84,7 @@ class ModelRegistry:
             dataset_config={
                 "root": "/root/domainnet",
                 "preprocessor_path": "pretrained_models/clip-vit-base-patch16/preprocessor_config.json",
-                "classes_per_domain": 170  # 每个域选择的类别数量
+                "classes_per_domain": 170
             }
         )
         self._models["1"] = domainnet_vit
