@@ -64,7 +64,7 @@ DOMAINNET_LABELS = [
     'wristwatch', 'yoga', 'zebra', 'zigzag'
 ]
 
-# 传输模式：'url' 或 'data-url'（推荐在实际数据集使用 'data-url'）
+# 传输模式：'url' 或 'data-url'
 TRANSPORT_MODE = 'data-url'
 
 def bytes_to_data_url(mime: str, content: bytes) -> str:
