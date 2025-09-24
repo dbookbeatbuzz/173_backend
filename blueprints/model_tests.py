@@ -58,16 +58,26 @@ def start_test():
             'error': f'inputType "{input_type}" does not match model configuration "{model_config.input_type.value}"'
         }), 400
     
+    # 验证客户端ID
+    client_id = data.get('clientId')
+    if client_id is not None:
+        try:
+            client_id = int(client_id)
+            if client_id < 1 or client_id > 30:
+                return jsonify({'error': 'clientId must be between 1 and 30'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'clientId must be a valid number'}), 400
+    
     # 生成唯一的任务ID
     job_id = f"job_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
     
     # 创建任务
     try:
-        job = create_job(job_id, model_id, total, input_type, seed)
+        job = create_job(job_id, model_id, total, input_type, seed, client_id)
         
         # 启动后台任务
         if start_model_test_job(job_id):
-            return jsonify({'jobId': job_id, 'total': total})
+            return jsonify({'jobId': job_id, 'total': total, 'clientId': job.client_id})
         else:
             return jsonify({'error': 'Failed to start job'}), 500
             
@@ -175,6 +185,7 @@ def get_job_status(job_id: str):
         return jsonify({
             'jobId': job.job_id,
             'modelId': job.model_id,
+            'clientId': job.client_id,
             'status': job.status,
             'total': job.total,
             'processed': job.processed,
