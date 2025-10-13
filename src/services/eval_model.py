@@ -1,4 +1,9 @@
+"""Model construction helpers for evaluation time."""
+
+from __future__ import annotations
+
 import logging
+import os
 from typing import Optional
 
 import torch
@@ -8,28 +13,21 @@ from transformers import CLIPModel
 logger = logging.getLogger(__name__)
 
 
-def _adapter_residual_hook(module, input, output):
-    """
-    Inject module._adapter output as residual into hidden states.
-    Works with different output structures from CLIPVisionTransformer.
-    """
-    adp = getattr(module, "_adapter", None)
-    if adp is None:
+def _adapter_residual_hook(module, _input, output):
+    adapter_module = getattr(module, "_adapter", None)
+    if adapter_module is None:
         return output
 
     if isinstance(output, tuple):
-        hs = output[0]
-        hs = adp(hs)
-        return (hs,) + output[1:]
-    elif hasattr(output, "hidden_states"):
-        hs = output.hidden_states
-        hs = adp(hs)
-        output.hidden_states = hs
+        hidden_states = output[0]
+        hidden_states = adapter_module(hidden_states)
+        return (hidden_states,) + output[1:]
+    if hasattr(output, "hidden_states"):
+        hidden_states = adapter_module(output.hidden_states)
+        output.hidden_states = hidden_states
         return output
-    else:
-        hs = output
-        hs = adp(hs)
-        return hs
+    hidden_states = adapter_module(output)
+    return hidden_states
 
 
 class Adapter(nn.Module):
@@ -39,17 +37,11 @@ class Adapter(nn.Module):
         self.act = nn.GELU()
         self.up = nn.Linear(bottleneck, dim, bias=False)
 
-    def forward(self, x):
-        return x + self.up(self.act(self.down(x)))
+    def forward(self, inputs):
+        return inputs + self.up(self.act(self.down(inputs)))
 
 
 class EvalCLIPVisionWithHead(nn.Module):
-    """
-    Minimal inference wrapper for CLIP ViT-B/16 vision backbone with classification head.
-    This mirrors the training-time architecture to make checkpoint loading compatible,
-    without importing federatedscope.
-    """
-
     def __init__(
         self,
         num_labels: int,
@@ -61,47 +53,46 @@ class EvalCLIPVisionWithHead(nn.Module):
         local_files_only: bool = True,
     ):
         super().__init__()
-        # Load CLIP vision from local directory by default
         try:
-            clip = CLIPModel.from_pretrained(pretrained_dir,
-                                             local_files_only=local_files_only)
-        except Exception as e:
-            msg = (
+            clip = CLIPModel.from_pretrained(
+                pretrained_dir,
+                local_files_only=local_files_only,
+            )
+        except Exception as exc:  # pragma: no cover - external dependency
+            message = (
                 f"Failed to load CLIPModel from '{pretrained_dir}'. "
                 "Ensure the pretrained files exist locally or set CLIP_PRETRAINED_DIR. "
-                f"Original error: {e}"
+                f"Original error: {exc}"
             )
-            logger.error(msg)
-            raise RuntimeError(msg)
+            logger.error(message)
+            raise RuntimeError(message) from exc
 
         self.vision = clip.vision_model
-        hidden = self.vision.config.hidden_size
-        self.classifier = nn.Linear(hidden, num_labels)
+        hidden_dim = self.vision.config.hidden_size
+        self.classifier = nn.Linear(hidden_dim, num_labels)
 
-        # Setup adapters (structure only; weights will come from checkpoint)
         self.adapters: Optional[nn.ModuleDict] = None
         if strategy == "adapter":
             layers = self.vision.encoder.layers
-            assert 1 <= adapter_last_k <= len(layers)
-            target_idx = list(range(len(layers) - adapter_last_k, len(layers)))
+            if not 1 <= adapter_last_k <= len(layers):
+                raise ValueError("adapter_last_k must be within the encoder depth")
+            target_indices = range(len(layers) - adapter_last_k, len(layers))
             self.adapters = nn.ModuleDict()
             self._hooks = []
-            for i in target_idx:
-                adp = Adapter(hidden, adapter_bottleneck)
-                self.adapters[f"layer_{i}"] = adp
-                setattr(layers[i], "_adapter", adp)
-                h = layers[i].register_forward_hook(_adapter_residual_hook)
-                self._hooks.append(h)
+            for idx in target_indices:
+                adapter_module = Adapter(hidden_dim, adapter_bottleneck)
+                self.adapters[f"layer_{idx}"] = adapter_module
+                setattr(layers[idx], "_adapter", adapter_module)
+                hook = layers[idx].register_forward_hook(_adapter_residual_hook)
+                self._hooks.append(hook)
         elif strategy == "linear":
-            # no adapters
             pass
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 
     @torch.no_grad()
     def forward(self, pixel_values):
-        outputs = self.vision(pixel_values=pixel_values,
-                              output_hidden_states=False)
+        outputs = self.vision(pixel_values=pixel_values, output_hidden_states=False)
         pooled = outputs.pooler_output
         logits = self.classifier(pooled)
         return logits
@@ -116,7 +107,6 @@ def build_model_for_eval(
     local_files_only: bool = True,
 ):
     if pretrained_dir is None:
-        import os
         pretrained_dir = (
             os.environ.get("CLIP_PRETRAINED_DIR")
             or "pretrained_models/clip-vit-base-patch16"
