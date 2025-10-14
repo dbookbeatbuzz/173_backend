@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import random
 import threading
@@ -14,13 +15,9 @@ from PIL import Image
 import torch
 
 from src.models.job_store import jobs, lock
-from src.models.model_registry import model_registry
-from src.models.dataset_manager import DatasetConfig, DatasetManagerFactory
-from src.services.evaluation import (
-    _infer_model_hyperparams_from_state,
-    load_client_checkpoint,
-)
-from src.services.eval_model import build_model_for_eval
+from src.plugins import plugin_registry
+
+logger = logging.getLogger(__name__)
 
 TRANSPORT_MODE = "data-url"
 
@@ -57,56 +54,57 @@ def _emit(job, event: str, payload: Dict[str, Any]) -> None:
 
 def load_model_for_job(job):
     try:
-        model_config = model_registry.get_model(job.model_id)
-        if not model_config:
-            raise ValueError(f"Model {job.model_id} not found in registry")
-
-        dataset_config = DatasetConfig(
-            name=model_config.dataset_name,
-            root=model_config.dataset_config.get("root"),
-            input_type=model_config.input_type.value,
-            num_classes=0,
-            preprocessing_config=model_config.dataset_config.get("preprocessor_path"),
-            additional_config=model_config.dataset_config,
-        )
-
-        dataset_manager = DatasetManagerFactory.create_manager(
-            model_config.dataset_name,
-            dataset_config,
-        )
-
-        test_set, num_labels = dataset_manager.get_test_dataset()
-
+        # Get model plugin
+        model_plugin_cls = plugin_registry.get_model_plugin(job.model_id)
+        if not model_plugin_cls:
+            raise ValueError(f"Model plugin not found: {job.model_id}")
+        
+        model_plugin = model_plugin_cls()
+        logger.info(f"Using model plugin: {model_plugin.metadata.name}")
+        
+        # Get dataset plugin
+        dataset_plugin_cls = plugin_registry.get_dataset_plugin(model_plugin.dataset_plugin_id)
+        if not dataset_plugin_cls:
+            raise ValueError(f"Dataset plugin not found: {model_plugin.dataset_plugin_id}")
+        
+        # Configure dataset
+        dataset_config = getattr(job, "dataset_config", {})
+        if not dataset_config.get("root"):
+            dataset_config["root"] = dataset_plugin_cls.metadata.default_root
+        
+        dataset_plugin = dataset_plugin_cls(config=dataset_config)
+        logger.info(f"Using dataset plugin: {dataset_plugin.metadata.name}")
+        
+        # Get test dataset
+        test_set, num_labels = dataset_plugin.get_test_dataset()
+        
+        # Get client ID
         client_id = getattr(job, "client_id", 1)
-
-        model_path = model_registry.get_model_path(job.model_id, client_id)
+        
+        # Get model path
+        model_path = model_plugin.get_model_path(client_id)
         if not model_path or not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
-
-        state = load_client_checkpoint(model_config.model_path, client_id)
-        if isinstance(state, dict) and "model" in state:
-            state = state["model"]
-
-        strategy, adapter_last_k, adapter_bottleneck = _infer_model_hyperparams_from_state(state)
-
-        strategy = model_config.strategy
-        adapter_last_k = model_config.adapter_last_k
-        adapter_bottleneck = model_config.adapter_bottleneck
-
-        model = build_model_for_eval(
-            num_labels=num_labels,
-            strategy=strategy,
-            adapter_last_k=adapter_last_k,
-            adapter_bottleneck=adapter_bottleneck,
-        )
-
-        missing, unexpected = model.load_state_dict(state, strict=False)
+        
+        # Load checkpoint
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        state_dict = model_plugin.load_checkpoint(model_path, device="cpu")
+        
+        # Build model
+        model = model_plugin.build_model(num_labels=num_labels)
+        
+        # Load state dict
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            logger.warning(f"Missing keys when loading model: {missing[:5]}")
+        if unexpected:
+            logger.warning(f"Unexpected keys when loading model: {unexpected[:5]}")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model.to(device)
         model.eval()
 
-        return model, test_set, dataset_manager, device, num_labels
+        return model, test_set, dataset_plugin, device, num_labels
 
     except Exception as exc:
         raise RuntimeError(f"Failed to load model {job.model_id}: {exc}") from exc

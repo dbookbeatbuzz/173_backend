@@ -12,7 +12,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 
 from src.config import Settings, get_settings
 from src.models.job_store import create_job, get_job, jobs, lock
-from src.models.model_registry import model_registry
+from src.plugins import plugin_registry
 from src.services.model_test_runner import start_model_test_job
 
 bp = Blueprint("model_tests", __name__)
@@ -34,13 +34,19 @@ def start_test():
     if model_id is None:
         return jsonify({"error": "modelId is required"}), 400
 
+    # Try to convert to int if it's numeric (frontend sends int)
     try:
-        model_id = str(model_id)
+        model_id = int(model_id)
     except (ValueError, TypeError):
-        return jsonify({"error": "modelId must be string or number"}), 400
-
-    model_config = model_registry.get_model(model_id)
-    if not model_config:
+        pass  # Keep as string if not numeric
+    
+    # Resolve model_id (handles both int and string)
+    resolved_model_id = plugin_registry.resolve_model_id(model_id)
+    if not resolved_model_id:
+        return jsonify({"error": f"Model {model_id} not found"}), 404
+    
+    model_metadata = plugin_registry.get_model_metadata(resolved_model_id)
+    if not model_metadata:
         return jsonify({"error": f"Model {model_id} not found"}), 404
 
     try:
@@ -59,13 +65,13 @@ def start_test():
 
     input_type = data.get("inputType")
     if input_type is None:
-        input_type = model_config.input_type.value
+        input_type = model_metadata.input_type.value
     elif input_type not in ("text", "image"):
         return jsonify({"error": 'inputType must be "text" or "image"'}), 400
 
-    if input_type != model_config.input_type.value:
+    if input_type != model_metadata.input_type.value:
         return jsonify({
-            "error": f'inputType "{input_type}" does not match model configuration "{model_config.input_type.value}"'
+            "error": f'inputType "{input_type}" does not match model configuration "{model_metadata.input_type.value}"'
         }), 400
 
     client_id = data.get("clientId")
@@ -80,7 +86,8 @@ def start_test():
     job_id = f"job_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
 
     try:
-        job = create_job(job_id, model_id, total, input_type, seed, client_id)
+        # Use resolved_model_id (string) for internal processing
+        job = create_job(job_id, resolved_model_id, total, input_type, seed, client_id)
         if start_model_test_job(job_id):
             return jsonify({"jobId": job_id, "total": total, "clientId": job.client_id})
         return jsonify({"error": "Failed to start job"}), 500
@@ -170,9 +177,13 @@ def get_job_status(job_id: str):
         return jsonify({"error": "Job not found"}), 404
 
     with lock:
+        # Get numeric_id for frontend compatibility
+        metadata = plugin_registry.get_model_metadata(job.model_id)
+        model_id_for_frontend = metadata.numeric_id if (metadata and metadata.numeric_id is not None) else job.model_id
+        
         return jsonify({
             "jobId": job.job_id,
-            "modelId": job.model_id,
+            "modelId": model_id_for_frontend,  # Return numeric ID for frontend
             "clientId": job.client_id,
             "status": job.status,
             "total": job.total,

@@ -2,7 +2,7 @@
 name = "173-backend"
 version = "0.1.0"
 description = "Add your description here"
-readme = "docs/README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "flask>=2.3.0",

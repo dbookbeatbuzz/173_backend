@@ -10,7 +10,7 @@ from flask_cors import CORS
 
 from src.config import Settings, get_settings
 from src.api.blueprints import model_tests_bp
-from src.models.model_registry import model_registry
+from src.plugins import plugin_registry
 from src.services.evaluation import evaluate_client
 
 
@@ -42,37 +42,58 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     @app.get("/api/models")
     def list_models():
         models_payload = []
-        for config in model_registry.list_models():
-            model_exists = model_registry.validate_model_exists(config.model_id, client_id=1)
+        for metadata in plugin_registry.list_models():
+            model_exists = plugin_registry.validate_model_exists(metadata.model_id, client_id=1)
+            
+            # Get dataset name from plugin
+            model_plugin_cls = plugin_registry.get_model_plugin(metadata.model_id)
+            dataset_name = model_plugin_cls.dataset_plugin_id if model_plugin_cls else "unknown"
+            
             models_payload.append({
-                "id": config.model_id,
-                "name": config.name,
-                "type": config.model_type.value,
-                "inputType": config.input_type.value,
-                "description": config.description,
-                "dataset": config.dataset_name,
+                "id": metadata.numeric_id,
+                "name": metadata.name,
+                "type": metadata.model_type.value,
+                "inputType": metadata.input_type.value,
+                "description": metadata.description,
+                "dataset": dataset_name,
                 "available": model_exists,
             })
         return jsonify({"models": models_payload})
 
     @app.get("/api/models/<model_id>")
     def get_model_info(model_id: str):
-        config = model_registry.get_model(model_id)
-        if not config:
+        # Try to convert to int if it looks like a number
+        try:
+            model_id = int(model_id)
+        except (ValueError, TypeError):
+            pass  # Keep as string
+        
+        metadata = plugin_registry.get_model_metadata(model_id)
+        if not metadata:
             return jsonify({"error": "Model not found"}), 404
 
-        model_exists = model_registry.validate_model_exists(model_id, client_id=1)
+        model_exists = plugin_registry.validate_model_exists(model_id, client_id=1)
+        
+        # Get additional info from plugin
+        model_plugin_cls = plugin_registry.get_model_plugin(model_id)
+        model_plugin = model_plugin_cls() if model_plugin_cls else None
+        
+        dataset_name = model_plugin.dataset_plugin_id if model_plugin else "unknown"
+        strategy = model_plugin.strategy if model_plugin else "unknown"
+        num_labels = model_plugin.num_labels if model_plugin else None
+        model_path = model_plugin.model_path if model_plugin else None
+
         return jsonify({
-            "id": config.model_id,
-            "name": config.name,
-            "type": config.model_type.value,
-            "inputType": config.input_type.value,
-            "description": config.description,
-            "dataset": config.dataset_name,
-            "strategy": config.strategy,
-            "numLabels": config.num_labels,
+            "id": metadata.numeric_id,
+            "name": metadata.name,
+            "type": metadata.model_type.value,
+            "inputType": metadata.input_type.value,
+            "description": metadata.description,
+            "dataset": dataset_name,
+            "strategy": strategy,
+            "numLabels": num_labels,
             "available": model_exists,
-            "modelPath": config.model_path,
+            "modelPath": model_path,
         })
 
     @app.get("/clients")
@@ -94,6 +115,9 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     @app.post("/evaluate")
     def evaluate_endpoint():
         body = request.get_json(force=True, silent=True) or {}
+        
+        model_id = body.get("model_id", "domainnet_vit_fedsak")
+        
         try:
             client_id = int(body.get("client_id"))
         except Exception:
@@ -108,15 +132,13 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
         try:
             result = evaluate_client(
+                model_id=model_id,
                 client_id=client_id,
                 split=split,
                 limit=limit,
                 batch_size=batch_size,
                 num_workers=num_workers,
                 device=device,
-                models_root=settings.models_root,
-                data_root=settings.data_root,
-                preprocessor_json=settings.preprocessor_json,
             )
             return jsonify(result)
         except FileNotFoundError as exc:

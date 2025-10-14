@@ -3,58 +3,51 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Dict, Optional
 
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from src.datasets.domainnet import build_domainnet_splits
-from src.services.eval_model import build_model_for_eval
+from src.plugins import plugin_registry
 
 logger = logging.getLogger(__name__)
 
 
-def load_client_checkpoint(save_root: str, client_id: int) -> Dict[str, torch.Tensor]:
-    checkpoint_path = os.path.join(save_root, "client", f"client_model_{client_id}.pt")
-    if not os.path.isfile(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    if isinstance(checkpoint, dict) and "model" in checkpoint:
-        return checkpoint["model"]
-    return checkpoint
-
-
-def _infer_model_hyperparams_from_state(state: Dict[str, torch.Tensor]):
-    strategy = "adapter" if any("_adapter" in key for key in state.keys()) else "linear"
-    adapter_last_k = 3
-    adapter_bottleneck = 64
-    return strategy, adapter_last_k, adapter_bottleneck
-
-
 @torch.no_grad()
 def evaluate_client(
-    client_id: int,
+    model_id: str = "domainnet_vit_fedsak",
+    client_id: int = 1,
     split: str = "test",
     limit: Optional[int] = None,
     batch_size: int = 64,
     num_workers: int = 4,
     device: Optional[str] = None,
-    models_root: str = "exp_models/Domainnet_ViT_fedsak_lda",
-    data_root: str = "/root/domainnet",
-    preprocessor_json: Optional[str] = None,
 ) -> Dict[str, object]:
+    """Evaluate a client model on a dataset split."""
     if split not in {"train", "val", "test"}:
         raise ValueError("split must be one of 'train', 'val', 'test'")
 
-    train_set, val_set, test_set, num_labels = build_domainnet_splits(
-        root=data_root,
-        preprocessor_path=preprocessor_json or None,
-        seed=12345,
-    )
+    # Get model plugin
+    model_plugin_cls = plugin_registry.get_model_plugin(model_id)
+    if not model_plugin_cls:
+        raise ValueError(f"Model plugin not found: {model_id}")
+    
+    model_plugin = model_plugin_cls()
+    logger.info(f"Evaluating model: {model_plugin.metadata.name}")
+    
+    # Get dataset plugin
+    dataset_plugin_cls = plugin_registry.get_dataset_plugin(model_plugin.dataset_plugin_id)
+    if not dataset_plugin_cls:
+        raise ValueError(f"Dataset plugin not found: {model_plugin.dataset_plugin_id}")
+    
+    dataset_plugin = dataset_plugin_cls()
+    logger.info(f"Using dataset: {dataset_plugin.metadata.name}")
+    
+    # Get datasets
+    train_set, val_set, test_set = dataset_plugin.get_datasets()
     datasets = {"train": train_set, "val": val_set, "test": test_set}
     dataset = datasets[split]
-
+    
     if limit is not None and limit > 0:
         dataset = Subset(dataset, list(range(min(limit, len(dataset)))))
 
@@ -66,16 +59,15 @@ def evaluate_client(
         pin_memory=True,
     )
 
-    state = load_client_checkpoint(models_root, client_id)
-    strategy, adapter_last_k, adapter_bottleneck = _infer_model_hyperparams_from_state(state)
-
-    model = build_model_for_eval(
-        num_labels=num_labels,
-        strategy=strategy,
-        adapter_last_k=adapter_last_k,
-        adapter_bottleneck=adapter_bottleneck,
-    )
-    missing, unexpected = model.load_state_dict(state, strict=False)
+    # Get number of labels
+    num_labels = dataset_plugin.get_num_classes()
+    
+    # Load model
+    model_path = model_plugin.get_model_path(client_id)
+    state_dict = model_plugin.load_checkpoint(model_path, device="cpu")
+    
+    model = model_plugin.build_model(num_labels=num_labels)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         logger.warning("Missing keys when loading client %s: %s ...", client_id, missing[:5])
     if unexpected:
@@ -98,6 +90,7 @@ def evaluate_client(
 
     accuracy = correct / max(total, 1)
     return {
+        "model_id": model_id,
         "client_id": client_id,
         "split": split,
         "samples": total,
