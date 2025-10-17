@@ -26,6 +26,7 @@ class InputType(Enum):
     """Input data types."""
     TEXT = "text"
     IMAGE = "image"
+    GRAPH = "graph"
 
 
 @dataclass

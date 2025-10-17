@@ -168,14 +168,28 @@ def test_model(model_id: str, client_id: int = 1) -> None:
         print(f"✓ Model ready")
         
         # Test inference on a sample
-        sample, label = test_set[0]
+        sample = test_set[0]
         print(f"\n  Testing inference on sample 0...")
-        print(f"  True label: {label} ({dataset_plugin.get_class_name(label)})")
-        
-        with torch.no_grad():
-            output = model(sample.unsqueeze(0))
-            pred = output.argmax(dim=1).item()
-            print(f"  Predicted: {pred} ({dataset_plugin.get_class_name(pred)})")
+
+        # Handle different data types (graph vs tensor)
+        if hasattr(sample, 'y'):
+            # Graph data (PyTorch Geometric Data object)
+            label = sample.y.item() if sample.y.dim() == 1 else sample.y[0].item()
+            print(f"  True label: {label} ({dataset_plugin.get_class_name(label)})")
+
+            with torch.no_grad():
+                output = model(sample)
+                pred = output.argmax(dim=1).item()
+                print(f"  Predicted: {pred} ({dataset_plugin.get_class_name(pred)})")
+        else:
+            # Tensor data (image datasets return (tensor, label) tuples)
+            data, label = sample
+            print(f"  True label: {label} ({dataset_plugin.get_class_name(label)})")
+
+            with torch.no_grad():
+                output = model(data.unsqueeze(0))
+                pred = output.argmax(dim=1).item()
+                print(f"  Predicted: {pred} ({dataset_plugin.get_class_name(pred)})")
         
         print(f"\n✓ Model '{model_id}' is working correctly")
         
